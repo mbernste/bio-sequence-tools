@@ -1,11 +1,19 @@
 #!/usr/bin/python
 
+import sys
+sys.path.append("./..")
+sys.path.append("./../fastq_error")
+
 import fasta
 import sequence
 import random
+import phred
+import cPickle as pickle
+import rand_seq
 import numpy
 from os.path import join
 from numpy.random import dirichlet
+from phred import QScoreModel
 from sequence import Sequence
 from custom_discrete_distribution import CustomDiscreteDistribution
 from optparse import OptionParser
@@ -30,7 +38,23 @@ class Mapping:
     def __repr__(self):
         return "<" + "ReadId: " + str(self.readId) + ", TranscriptId: " + str(self.transcriptId) + ", StartPosition: " + str(self.startPosition) + ", IsForward: " + str(self.isForward) + ">" 
 
-def generatePairedEndReadFromTranscript(transcript, readLength):
+def modifyBaseWithError(base, qScore):
+    pError = phred.convertQScoreToProbability(qScore)
+    #print "ASCII Score: " + str(phred.convertQScoreToAscii(qScore)) + ", P: " + str(phred.convertQScoreToProbability(qScore)) 
+    if random.random() < pError:
+        #print "Introducing error!"
+        return rand_seq.randNucleotideExlude([base])        
+    else:
+         return base
+
+def modifySequenceWithErrors(seqStr, qScoreModel):
+    modifiedSeqStr = ""
+    qScores = qScoreModel.generateQScoreSequence()
+    for i, base in enumerate(seqStr):
+         modifiedSeqStr += modifyBaseWithError(base, qScores[i])
+    return modifiedSeqStr
+
+def generatePairedEndReadFromTranscript(transcript, readLength, qScoreModel=None):
     """
     Generate a paired-end read from a given transcript.
     """
@@ -43,17 +67,30 @@ def generatePairedEndReadFromTranscript(transcript, readLength):
     # Generate reads from ends of fragment
     forwardSeq = fragment[0:readLength]
     reverseSeq = sequence.reverseCompliment(fragment)[0:readLength]
+    if qScoreModel != None:
+        forwardSeq = modifySequenceWithErrors(forwardSeq, qScoreModel)
+        reverseSeq = modifySequenceWithErrors(reverseSeq, qScoreModel)
     forwardStartPos = startPos
     reverseStartPos = startPos + len(fragment) - readLength
 
     return ((forwardSeq, forwardStartPos), (reverseSeq, reverseStartPos), transcript.name)
  
-def generateSingleEndReadFromTranscript(transcript, readLength):
+def generateSingleEndReadFromTranscript(transcript, readLength, qScoreModel=None):
     startPos = random.randint(0, len(transcript.sequence) - readLength)
     seq = transcript.sequence[startPos : startPos + readLength]
+    origSeq = seq
+    if qScoreModel != None:
+        seq = modifySequenceWithErrors(seq, qScoreModel)
+
+    # TODO REMOVE
+    #print "------------------"
+    #print "Original/New"
+    #print origSeq
+    #print seq
+
     return (seq, startPos, transcript.name)
 
-def simulatePairedEndReads(expressionLevels, transcripts, numReads, readLength):
+def simulatePairedEndReads(expressionLevels, transcripts, numReads, readLength, qScoreModel):
     forwardReads = []
     reverseReads = []
     mappings = []
@@ -72,7 +109,7 @@ def simulatePairedEndReads(expressionLevels, transcripts, numReads, readLength):
         transcript = transcripts[dist.sample()]
         trueExpression[transcript.name] += 1.0
         pairedEndReadResult = generatePairedEndReadFromTranscript(transcript, readLength)
-        ((forwardSeq, forwardStartPos), (reverseSeq, reverseStartPos), transcript.name) = generatePairedEndReadFromTranscript(transcript, readLength)       
+        ((forwardSeq, forwardStartPos), (reverseSeq, reverseStartPos), transcript.name) = generatePairedEndReadFromTranscript(transcript, readLength, qScoreModel)       
 
         # Unpack generated paired-end reads 
         forwardSeq = pairedEndReadResult[0][0]
@@ -81,12 +118,13 @@ def simulatePairedEndReads(expressionLevels, transcripts, numReads, readLength):
         reverseStartPos = pairedEndReadResult[1][1]
         transcriptId = pairedEndReadResult[2]
         
-        readNameF = str(readId) #+ FORWARD_SUFFIX
-        readNameR = str(readId + 1) #+ REVERSE_SUFFIX
-        readId += 2 
+        readNameF = str(readId) + FORWARD_SUFFIX
+        readNameR = str(readId) + REVERSE_SUFFIX
+        readId += 1 
 
         forwardReads.append(Sequence(readNameF, forwardSeq))
         reverseReads.append(Sequence(readNameR, reverseSeq))
+
         mappings.append(Mapping(readNameF, transcriptId, forwardStartPos,True))
         mappings.append(Mapping(readNameR, transcriptId, reverseStartPos,False))
 
@@ -99,7 +137,7 @@ def simulatePairedEndReads(expressionLevels, transcripts, numReads, readLength):
 
     return ((forwardReads, reverseReads), trueExpression, mappings)
 
-def simulateSingleEndReads(expressionLevels, transcripts, numReads, readLength):
+def simulateSingleEndReads(expressionLevels, transcripts, numReads, readLength, qScoreModel):
     """ 
     Simulate single-end reads from a set of transcripts.
         
@@ -124,7 +162,7 @@ def simulateSingleEndReads(expressionLevels, transcripts, numReads, readLength):
     for i in range(0, numReads):
         transcript = transcripts[dist.sample()]
         trueExpression[transcript.name] += 1.0
-        singleEndReadResult = generateSingleEndReadFromTranscript(transcript, readLength)
+        singleEndReadResult = generateSingleEndReadFromTranscript(transcript, readLength, qScoreModel)
         readSeq = singleEndReadResult[0]
         startPos = singleEndReadResult[1]
         transcriptId = singleEndReadResult[2]
@@ -184,29 +222,41 @@ def getOutputFileNames(options):
     this program auto-generate the names of each output file using the experiment name.  This method parses the options and 
     determines the name of the output files.
     """
-    forwardReadOutput = None
-    reverseReadOutput = None
+    readOutputForward = None
+    readOutputReverse = None
+    readOutput = None
     expressionOutput = None 
     mappingOutput = None 
 
     if options.simulation_name == None:
-        forwardReadOutput = options.forward_read_output
-        reverseReadOutput = options.reverse_read_output
+        readOutput = options.read_output
         expressionOutput = options.expression_output
         mappingOutput = options.mapping_output
     else:
-        forwardReadOutput = options.simulation_name + ".reads.forward.fa"
-        reverseReadOutput = options.simulation_name + ".reads.reverse.fa"
+        if (options.paired_end and options.separate_mates):
+            readOutputForward = options.simulation_name + ".reads.forward.fa"
+            readOutputReverse = options.simulation_name + ".reads.reverse.fa"
+            readOutput = (readOutputForward, readOutputReverse)
+        else:
+            readOutput = options.simulation_name + ".reads.fa"
         expressionOutput = options.simulation_name + ".expression.txt"
         mappingOutput = options.simulation_name + ".mapping.txt"
 
     if options.destination != None:
-        forwardReadOutput = join(options.destination, forwardReadOutput)
-        reverseReadOutput = join(options.destination, reverseReadOutput)
+        if (options.paired_end and options.separate_mates):
+            readOutput = (join(options.destination, readOutput[0]), join(options.destination, readOutput[1]))
+        else:
+            readOutput = join(options.destination, readOutput)
         expressionOutput = join(options.destination, expressionOutput)
         mappingOutput = join(options.destination, mappingOutput)
 
-    return (forwardReadOutput, reverseReadOutput, expressionOutput, mappingOutput)
+    return (readOutput, expressionOutput, mappingOutput)
+
+def loadQScoreModel(modelPath):
+    f = open(modelPath, 'r')
+    qScoreModel = pickle.load(f)
+    f.close() 
+    return qScoreModel
 
 def main():
     parser = OptionParser()
@@ -214,25 +264,34 @@ def main():
     parser.add_option("-c", "--expression_file", help="file where custom expression levels are written. only used for custom expression levels")
     parser.add_option("-e", "--expression_level", default=UNIFORM_ARG, help="expression level distribution: uniform, dirichlet, custom (default: dirichlet)")
     parser.add_option("-l", "--read_length", type="int", help="read length")
-    parser.add_option("-n", "--num_reads", type="int", help="number of reads")
+    parser.add_option("-n", "--num_reads", type="float", help="number of reads")
     parser.add_option("-t", "--transcript_file", help="file where transcripts can be found")
-    parser.add_option("-f", "--forward_read_output", help="filename to write forward reads")
     parser.add_option("-m", "--mapping_output", help="filename to store read to transcript mapping")
     parser.add_option("-p", "--paired_end", action="store_true", help="generate paired end reads")
-    parser.add_option("-r", "--reverse_read_output", help="filename to write reverse reads")
+    parser.add_option("-q", "--read_errors", action="store_true", help="generate reads with errors. Requires error model file path")
+    parser.add_option("-r", "--read_output", help="filename to write reads")
+    parser.add_option("-s", "--separate_mates", action="store_true", help="separate paired end reads into two files (used only when '-p' is used)")
+    parser.add_option("-u", "--error_model_file", help="path to the error model file. Requred for the '-q' argument")
     parser.add_option("-x", "--expression_output", help="filename to write expression levels")
     parser.add_option("-d", "--destination", help="path to directory to write all output")
     (options, args) = parser.parse_args()
 
     print options
 
-    numReads = options.num_reads
+    # Load the Phred Q-Score model if reads are generated with errors
+    qScoreModel = None
+    if options.read_errors == True:
+        qScoreModel = loadQScoreModel(options.error_model_file)
+
+    numReads = int(options.num_reads)
     readLength = options.read_length
     expressionDistribution = options.expression_level
     transcripts = fasta.readFastaFile(options.transcript_file) 
-    
-    forwardReadOutput, reverseReadOutput, expressionOutput, mappingOutput = getOutputFileNames(options)
+   
+    # Generate output paths based on options 
+    readOutput, expressionOutput, mappingOutput = getOutputFileNames(options)
 
+    # Read expression distribution
     if expressionDistribution == CUSTOM_ARG:
         expressionLevels = readExpressionLevels(options.expression_file)
     else:    
@@ -241,12 +300,19 @@ def main():
     trueExpression = None
     mappings = None
     if options.paired_end == True:
-        reads, trueExpression, mappings = simulatePairedEndReads(expressionLevels, transcripts, numReads, readLength)
-        fasta.writeFastaFile(forwardReadOutput, reads[0])
-        fasta.writeFastaFile(reverseReadOutput, reads[1])
+        reads, trueExpression, mappings = simulatePairedEndReads(expressionLevels, transcripts, numReads, readLength, qScoreModel)
+        
+        if (options.separate_mates):
+            fasta.writeFastaFile(readOutput[0], reads[0])
+            fasta.writeFastaFile(readOutput[1], reads[1])
+        else:
+            fasta.writeFastaFile(readOutput, reads[0] + reads[1])
+        #fasta.writeFastaFile(readOutput, reads)
+        #fasta.writeFastaFile(forwardReadOutput, reads[0])
+        #fasta.writeFastaFile(reverseReadOutput, reads[1])
     else:
-        reads, trueExpression, mappings = simulateSingleEndReads(expressionLevels, transcripts, numReads, readLength)
-        fasta.writeFastaFile(forwardReadOutput, reads)
+        reads, trueExpression, mappings = simulateSingleEndReads(expressionLevels, transcripts, numReads, readLength, qScoreModel)
+        fasta.writeFastaFile(readOutput, reads)
     writeMappingsFile(mappingOutput, mappings)
     writeExpressionFile(expressionOutput, trueExpression)
 

@@ -1,6 +1,7 @@
 #!/usr/bin/python
 
 import random
+import cPickle as pickle
 
 class Interval:
     """
@@ -22,9 +23,10 @@ class CustomDiscreteDistribution:
     """
     def __init__(self, probabilities={}):
         """ 
-        Keyword arguments:
+        Arguments:
         probabilites -- dictionary of values with associated probabilities
         """ 
+        self.probabilities = probabilities;
         self.intervals = []
         lowerBound = 0.0
         for key, val in probabilities.iteritems():

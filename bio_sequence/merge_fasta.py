@@ -58,8 +58,8 @@ def getAllSequences(path, ommitDuplicateSequences):
         for name, seq in namesToSeqs.iteritems():
             if not (ommitDuplicateSequences and sequenceExists(seq, mergedNameToSeqs) ):
                 if name in mergedNameToSeqs.keys():
-                    seq.name = seq.name + "+"
-                    mergedNameToSeqs[name + "+"] = seq
+                    seq.name = "+" + seq.name
+                    mergedNameToSeqs["+" + name] = seq
                 else:
                     mergedNameToSeqs[name] = seq
     return mergedNameToSeqs

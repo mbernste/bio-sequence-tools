@@ -12,8 +12,7 @@ class Sequence:
 
 def complimentBase(base):
     base = base.upper()
-    return compliments[base]
-   
+    return compliments[base]   
 
 def reverseCompliment(seq):
     reverseComp = ""

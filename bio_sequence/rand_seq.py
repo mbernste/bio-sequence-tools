@@ -5,10 +5,16 @@ import random
 from sequence import Sequence
 import fasta
 
+NUCLEOTIDES = ['A', 'C', 'T', 'G']
+
 def randNucleotide():
-    nucleotides = ['A', 'C', 'T', 'G']
     i = random.randint(0, 3)
-    return nucleotides[i]
+    return NUCLEOTIDES[i]
+
+def randNucleotideExlude(excludedNucleotides):
+    pickFrom = [nucl for nucl in NUCLEOTIDES if nucl not in excludedNucleotides]
+    i = random.randint(0, len(pickFrom)-1)
+    return pickFrom[i]    
 
 def genSequence(length):
     seq = ""
