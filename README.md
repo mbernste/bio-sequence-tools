@@ -1,6 +1,6 @@
 # bio-sequence-tools
 
-Tools I'm developing for my research in RNA-seq analysis.  
+Helpful scripts for my research in RNA-seq analysis.  
 
 	RNA-seq read simulator
 	RNA-seq read error models 
